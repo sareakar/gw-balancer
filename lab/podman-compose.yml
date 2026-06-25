@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: docker.io/postgres:16
+    environment:
+      POSTGRES_DB: gwbalancer
+      POSTGRES_USER: gwb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpass}
+    volumes:
+      - ./init-db:/docker-entrypoint-initdb.d
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gwb -d gwbalancer"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: docker.io/redis:7
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "6379:6379"
+
+  core:
+    build:
+      context: ../core
+      dockerfile: Containerfile
+    environment:
+      DATABASE_URL: postgresql://gwb:${POSTGRES_PASSWORD:-devpass}@postgres:5432/gwbalancer
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: DEBUG
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  monitor-sim:
+    image: docker.io/python:3.12-slim
+    command: >
+      sh -c "pip install httpx --quiet && python /app/simulator.py"
+    environment:
+      CORE_URL: http://core:8000
+      API_KEY: lab-monitor-key-001
+      GATEWAY_SLUGS: gw-001,gw-002,gw-003
+      REPORT_INTERVAL: "10"
+    volumes:
+      - ../monitors/simulated:/app
+    depends_on:
+      core:
+        condition: service_started
+
+volumes:
+  postgres_data:
